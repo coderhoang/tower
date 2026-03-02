@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Tower Defense</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+
+        :root {
+            --void-black: #02040a;
+            --plasma-blue: #00f2ff;
+            --hull-gray: #1a1e2e;
+            --ion-purple: #bc13fe;
+            --fusion-orange: #ff8c00;
+            --laser-red: #ff004c;
+            --credit-gold: #ffd700;
+        }
+
+        body {
+            background-color: var(--void-black);
+            color: #e2e8f0;
+            font-family: 'JetBrains Mono', monospace;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .orbitron { font-family: 'Orbitron', sans-serif; }
+
+        /* Tactical HUD Layout */
+        #game-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            max-width: 1600px;
+            max-height: 1000px;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #0a0f1e 0%, #02040a 100%);
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            cursor: crosshair;
+        }
+
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+            background: transparent;
+        }
+
+        /* Responsive Side Panels */
+        .tactical-sidebar {
+            width: 320px;
+            background: rgba(13, 17, 23, 0.9);
+            border-left: 1px solid rgba(0, 242, 255, 0.2);
+            backdrop-filter: blur(15px);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.3s ease;
+        }
+
+        /* Floating Command Bar (Bottom) */
+        #command-bar {
+            height: 100px;
+            background: rgba(10, 15, 25, 0.95);
+            border-top: 2px solid var(--plasma-blue);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+            z-index: 30;
+            box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.8);
+        }
+
+        /* Tooltip & Context Menus */
+        #tower-context {
+            position: absolute;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--plasma-blue);
+            border-radius: 4px;
+            padding: 12px;
+            pointer-events: auto;
+            display: none;
+            z-index: 100;
+            min-width: 200px;
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.3);
+        }
+
+        /* Shop Cards */
+        .blueprint-card {
+            background: rgba(30, 41, 59, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .blueprint-card:hover {
+            background: rgba(30, 41, 59, 0.8);
+            border-color: var(--plasma-blue);
+            transform: translateY(-2px);
+        }
+
+        .blueprint-card.selected {
+            background: rgba(0, 242, 255, 0.1);
+            border-color: var(--plasma-blue);
+            box-shadow: inset 0 0 15px rgba(0, 242, 255, 0.2);
+        }
+
+        .blueprint-card.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            filter: grayscale(1);
+        }
+
+        /* Animations */
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+
+        .scanline {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 2px;
+            background: rgba(0, 242, 255, 0.1);
+            animation: scanline 4s linear infinite;
+            pointer-events: none;
+        }
+
+        .stat-glitch { animation: glitch 0.3s infinite; }
+        @keyframes glitch {
+            0% { text-shadow: 2px 0 red, -2px 0 blue; }
+            50% { text-shadow: -2px 0 red, 2px 0 blue; }
+            100% { text-shadow: 2px 0 red, -2px 0 blue; }
+        }
+
+        /* Custom Scrollbar */
+        .scroller::-webkit-scrollbar { width: 4px; }
+        .scroller::-webkit-scrollbar-thumb { background: var(--plasma-blue); border-radius: 2px; }
+
+        @media (max-width: 1024px) {
+            #main-content { flex-direction: column; }
+            .tactical-sidebar { width: 100%; height: auto; border-left: none; border-top: 1px solid var(--plasma-blue); }
+        }
+    </style>
+</head>
+<body class="select-none">
+
+    <div id="game-wrapper">
+        <div class="scanline"></div>
+
+        <div id="main-content" class="flex flex-1 overflow-hidden">
+            <!-- Game Visuals -->
+            <div id="canvas-container" class="flex-1">
+                <canvas id="stage"></canvas>
+                
+                <!-- Floating Tower Info -->
+                <div id="tower-context">
+                    <div class="flex justify-between items-center mb-2">
+                        <span id="ctx-name" class="orbitron text-xs font-bold text-cyan-400">UNIT-X</span>
+                        <span id="ctx-lvl" class="bg-cyan-500/20 px-2 py-0.5 rounded text-[10px] font-bold">MK. I</span>
+                    </div>
+                    <div class="space-y-1 mb-4">
+                        <div class="flex justify-between text-[10px]"><span class="text-slate-500">FIREPOWER:</span> <span id="ctx-dmg" class="text-white">--</span></div>
+                        <div class="flex justify-between text-[10px]"><span class="text-slate-500">RANGE:</span> <span id="ctx-rng" class="text-white">--</span></div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="btn-upgrade" class="flex-1 bg-cyan-600 hover:bg-cyan-500 py-2 rounded text-[10px] font-bold transition-colors">UPGRADE ($<span id="ctx-cost">--</span>)</button>
+                        <button id="btn-sell" class="px-3 bg-red-900/40 hover:bg-red-600 text-red-500 hover:text-white rounded transition-colors">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <aside class="tactical-sidebar p-6">
+                <div class="mb-8">
+                    <h1 class="orbitron text-2xl font-black text-cyan-400 leading-none">TOWER <br> DEFENSE</h1>
+                    <div class="h-1 w-12 bg-cyan-500 mt-2"></div>
+                </div>
+
+                <div class="mb-6 space-y-4">
+                    <div class="bg-slate-900/80 p-3 border-l-4 border-amber-500">
+                        <p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">MONEY</p>
+                        <p id="stat-money" class="text-2xl font-bold text-amber-400">$2,500</p>
+                    </div>
+                    <div class="bg-slate-900/80 p-3 border-l-4 border-red-600">
+                        <p class="text-[9px] text-slate-500 font-bold uppercase tracking-widest">HEALTH</p>
+                        <p id="stat-lives" class="text-2xl font-bold text-red-500">100%</p>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-hidden flex flex-col">
+                    <h3 class="orbitron text-[10px] text-slate-400 font-bold mb-3 tracking-widest">UPGRADES</h3>
+                    <div id="shop" class="space-y-3 overflow-y-auto scroller pr-2">
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <footer id="command-bar">
+            <div class="flex gap-12 items-center">
+                
+                <div>
+                    <p class="text-[10px] text-slate-500 uppercase font-bold mb-1">Invasion Progress</p>
+                    <div class="flex items-center gap-4">
+                        <span id="stat-wave" class="text-cyan-400 font-bold orbitron">WAVE 01</span>
+                        <div class="w-48 h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div id="wave-progress" class="h-full bg-cyan-500 transition-all duration-300" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-4">
+                <button id="btn-start" class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 orbitron font-black px-12 py-4 rounded shadow-[0_0_25px_rgba(0,242,255,0.4)] transition-all active:scale-95 text-lg">
+                    START
+                </button>
+            </div>
+        </footer>
+
+        <!-- Overlays -->
+        <div id="game-over" class="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center hidden">
+            <div class="text-center">
+                <h2 class="orbitron text-6xl font-black text-red-600 mb-4 tracking-tighter">YOU LOST</h2>
+                <p class="text-slate-400 mb-8 font-mono">The enemy have crossed into your territories.</p>
+                <button onclick="location.reload()" class="bg-white text-black orbitron font-bold px-8 py-3 hover:bg-red-600 hover:text-white transition-colors">REINITIALIZE COMMAND</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const GRID_W = 16;
+        const GRID_H = 10;
+        let TILE = 64;
+
+        const BLUEPRINTS = {
+            railgun: {
+                id: 'railgun',
+                name: 'RAILGUN',
+                cost: 100,
+                range: 180,
+                damage: 25,
+                fireRate: 800,
+                color: '#00f2ff',
+                desc: 'Shoots bullets.',
+                projectile: 'slug',
+                growth: { cost: 1.6, dmg: 1.4, rng: 1.1, spd: 0.9 }
+            },
+            disruptor: {
+                id: 'disruptor',
+                name: 'BEAMER',
+                cost: 250,
+                range: 140,
+                damage: 8,
+                fireRate: 60,
+                color: '#bc13fe',
+                desc: 'Continuous beam',
+                projectile: 'beam',
+                growth: { cost: 1.8, dmg: 1.3, rng: 1.15, spd: 1.0 }
+            },
+            swarm: {
+                id: 'swarm',
+                name: 'TANK',
+                cost: 450,
+                range: 300,
+                damage: 120,
+                fireRate: 2500,
+                color: '#ff8c00',
+                desc: 'Shoots cannons',
+                projectile: 'missile',
+                aoe: 100,
+                growth: { cost: 1.5, dmg: 1.6, rng: 1.05, spd: 0.85 }
+            },
+            singularity: {
+                id: 'singularity',
+                name: 'BOSS',
+                cost: 1000,
+                range: 220,
+                damage: 100,
+                fireRate: 1500,
+                color: '#ff004c',
+                desc: 'Maximum Range, Maximum Damage!',
+                projectile: 'bolt',
+                growth: { cost: 2.0, dmg: 2.2, rng: 1.1, spd: 0.95 }
+            }
+        };
+        const GameState = {
+            credits: 650,
+            integrity: 100,
+            maxIntegrity: 100,
+            wave: 0,
+            inMission: false,
+            selectedBlueprint: 'railgun',
+            focusedTower: null,
+            lastFrame: 0,
+            totalEnemiesInWave: 0,
+            enemiesDefeated: 0,
+            spawnQueue: 0,
+            spawnTimer: 0
+        };
+
+        const Path = [
+            {x:0, y:3}, {x:1, y:3}, {x:2, y:3}, {x:3, y:3}, {x:4, y:3}, {x:5, y:3},
+            {x:5, y:4}, {x:5, y:5}, {x:5, y:6}, {x:6, y:6}, {x:7, y:6}, {x:8, y:6},
+            {x:8, y:5}, {x:8, y:4}, {x:8, y:3}, {x:9, y:3}, {x:10, y:3}, {x:11, y:3},
+            {x:12, y:3}, {x:12, y:4}, {x:12, y:5}, {x:12, y:6}, {x:13, y:6}, {x:14, y:6}, {x:15, y:6}
+        ];
+
+        const canvas = document.getElementById('stage');
+        const ctx = canvas.getContext('2d');
+        let towers = [], enemies = [], projectiles = [], particles = [], stars = [];
+
+        class Star {
+            constructor() {
+                this.x = Math.random() * 2000;
+                this.y = Math.random() * 2000;
+                this.size = Math.random() * 2;
+                this.speed = Math.random() * 0.2;
+            }
+            draw() {
+                ctx.fillStyle = "rgba(255,255,255," + (0.1 + Math.random() * 0.4) + ")";
+                ctx.fillRect(this.x % canvas.width, this.y % canvas.height, this.size, this.size);
+                this.y += this.speed;
+            }
+        }
+
+        class DefenseUnit {
+            constructor(gx, gy, bp) {
+                this.gx = gx; this.gy = gy;
+                this.x = gx * TILE + TILE/2;
+                this.y = gy * TILE + TILE/2;
+                this.bp = bp;
+                this.level = 1;
+                this.angle = 0;
+                this.lastShot = 0;
+                this.syncStats();
+            }
+
+            syncStats() {
+                const mod = this.level - 1;
+                this.damage = Math.floor(this.bp.damage * Math.pow(this.bp.growth.dmg, mod));
+                this.range = Math.floor(this.bp.range * Math.pow(this.bp.growth.rng, mod));
+                this.fireRate = Math.floor(this.bp.fireRate * Math.pow(this.bp.growth.spd, mod));
+                this.upgradeCost = Math.floor(this.bp.cost * Math.pow(this.bp.growth.cost, this.level));
+            }
+
+            update(now, dt) {
+                let bestTarget = null;
+                let maxProgress = -1;
+
+                enemies.forEach(e => {
+                    const dist = Math.hypot(e.x - this.x, e.y - this.y);
+                    if (dist < this.range && e.progress > maxProgress) {
+                        maxProgress = e.progress;
+                        bestTarget = e;
+                    }
+                });
+
+                if (bestTarget) {
+                    const targetAngle = Math.atan2(bestTarget.y - this.y, bestTarget.x - this.x);
+                    this.angle += (targetAngle - this.angle) * 0.15;
+
+                    if (now - this.lastShot > this.fireRate) {
+                        this.fire(bestTarget);
+                        this.lastShot = now;
+                    }
+                }
+            }
+
+            fire(target) {
+                if (this.bp.projectile === 'beam') {
+                    target.hp -= this.damage;
+                    particles.push(new BeamEffect(this.x, this.y, target.x, target.y, this.bp.color));
+                } else {
+                    projectiles.push(new Projectile(this.x, this.y, target, this));
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                ctx.fillStyle = '#1e293b';
+                ctx.strokeStyle = this.bp.color + '44';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.roundRect(-TILE*0.35, -TILE*0.35, TILE*0.7, TILE*0.7, 4);
+                ctx.fill(); ctx.stroke();
+
+                ctx.rotate(this.angle);
+                ctx.fillStyle = this.bp.color;
+                
+                if (this.bp.id === 'railgun') {
+                    ctx.fillRect(0, -5, TILE*0.4, 10);
+                    ctx.fillStyle = '#fff'; ctx.fillRect(TILE*0.1, -2, TILE*0.25, 4);
+                } else if (this.bp.id === 'disruptor') {
+                    ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(TILE*0.45, 0); ctx.lineTo(0, 8); ctx.fill();
+                    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(TILE*0.2, 0, 4, 0, Math.PI*2); ctx.fill();
+                } else if (this.bp.id === 'swarm') {
+                    ctx.fillRect(0, -10, TILE*0.25, 20);
+                    ctx.fillStyle = '#000'; ctx.fillRect(TILE*0.1, -8, TILE*0.1, 4); ctx.fillRect(TILE*0.1, 4, TILE*0.1, 4);
+                } else {
+                    ctx.beginPath(); ctx.arc(0, 0, TILE*0.3, 0, Math.PI*2); ctx.fill();
+                    ctx.strokeStyle = '#fff'; ctx.stroke();
+                }
+
+                ctx.restore();
+                
+                ctx.font = 'bold 10px JetBrains Mono';
+                ctx.fillStyle = '#64748b';
+                ctx.textAlign = 'center';
+                ctx.fillText(`MK.${this.level}`, this.x, this.y + TILE*0.45);
+            }
+        }
+
+        class Enemy {
+            constructor(wave) {
+                this.wave = wave;
+                const config = this.getTier();
+                this.hp = Math.floor(config.hp * (1 + wave * 0.15));
+                this.maxHp = this.hp;
+                this.speed = config.speed * (1 + wave * 0.02);
+                this.value = Math.floor(config.value * (1 + wave * 0.05));
+                this.color = config.color;
+                this.size = config.size;
+                this.idx = 0;
+                this.x = Path[0].x * TILE + TILE/2;
+                this.y = Path[0].y * TILE + TILE/2;
+                this.progress = 0;
+            }
+
+            getTier() {
+                const r = Math.random();
+                if (r > 0.9 && GameState.wave > 5) return { hp: 1200, speed: 0.6, value: 150, color: '#ff004c', size: 28 }; // Dreadnought
+                if (r > 0.6) return { hp: 200, speed: 1.5, value: 45, color: '#ffd700', size: 14 }; // Interceptor
+                return { hp: 100, speed: 0.9, value: 20, color: '#00f2ff', size: 18 }; // Scout
+            }
+
+            update(dt) {
+                const nextNode = Path[this.idx + 1];
+                if (!nextNode) {
+                    GameState.integrity -= 10;
+                    this.hp = 0;
+                    return;
+                }
+
+                const tx = nextNode.x * TILE + TILE/2;
+                const ty = nextNode.y * TILE + TILE/2;
+                const dx = tx - this.x;
+                const dy = ty - this.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < this.speed * dt) {
+                    this.idx++;
+                } else {
+                    this.x += (dx / dist) * this.speed * dt;
+                    this.y += (dy / dist) * this.speed * dt;
+                }
+                this.progress += this.speed * dt;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = this.color;
+                
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.moveTo(this.size, 0);
+                ctx.lineTo(-this.size*0.7, this.size*0.7);
+                ctx.lineTo(-this.size*0.4, 0);
+                ctx.lineTo(-this.size*0.7, -this.size*0.7);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.shadowBlur = 0;
+                const barW = this.size * 2;
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(-this.size, -this.size - 10, barW, 4);
+                ctx.fillStyle = '#10b981';
+                ctx.fillRect(-this.size, -this.size - 10, barW * (this.hp / this.maxHp), 4);
+
+                ctx.restore();
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, target, source) {
+                this.x = x; this.y = y; this.target = target; this.source = source;
+                this.speed = 8;
+                this.color = source.bp.color;
+            }
+
+            update(dt) {
+                const dx = this.target.x - this.x;
+                const dy = this.target.y - this.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < this.speed * dt) {
+                    this.impact();
+                    return false;
+                }
+
+                this.x += (dx / dist) * this.speed * dt;
+                this.y += (dy / dist) * this.speed * dt;
+                return true;
+            }
+
+            impact() {
+                if (this.source.bp.aoe) {
+                    enemies.forEach(e => {
+                        const d = Math.hypot(e.x - this.x, e.y - this.y);
+                        if (d < this.source.bp.aoe) e.hp -= this.source.damage;
+                    });
+                    particles.push(new ExplosionEffect(this.x, this.y, this.color, 30));
+                } else {
+                    this.target.hp -= this.source.damage;
+                    particles.push(new SparkEffect(this.x, this.y, this.color));
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, Math.PI*2); ctx.fill();
+            }
+        }
+
+        class BeamEffect {
+            constructor(x1, y1, x2, y2, c) { this.x1=x1;this.y1=y1;this.x2=x2;this.y2=y2;this.c=c;this.life=1;}
+            update(dt) { this.life -= 0.1 * dt; return this.life > 0; }
+            draw() {
+                ctx.strokeStyle = this.c;
+                ctx.lineWidth = 4 * this.life;
+                ctx.beginPath(); ctx.moveTo(this.x1, this.y1); ctx.lineTo(this.x2, this.y2); ctx.stroke();
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 1 * this.life;
+                ctx.stroke();
+            }
+        }
+
+        class SparkEffect {
+            constructor(x, y, c) { this.x=x;this.y=y;this.c=c;this.life=1;this.v={x:(Math.random()-0.5)*5, y:(Math.random()-0.5)*5};}
+            update(dt) { this.x+=this.v.x; this.y+=this.v.y; this.life-=0.05*dt; return this.life>0; }
+            draw() { ctx.fillStyle=this.c; ctx.globalAlpha=this.life; ctx.fillRect(this.x,this.y,2,2); ctx.globalAlpha=1; }
+        }
+
+        class ExplosionEffect {
+            constructor(x, y, c, n) {
+                this.parts = Array.from({length:n}, () => ({
+                    x, y, vx:(Math.random()-0.5)*12, vy:(Math.random()-0.5)*12, l:1, s:Math.random()*4
+                }));
+                this.c = c;
+            }
+            update(dt) {
+                this.parts.forEach(p => { p.x+=p.vx; p.y+=p.vy; p.l-=0.03*dt; });
+                return this.parts.some(p => p.l > 0);
+            }
+            draw() {
+                this.parts.forEach(p => {
+                    if (p.l <= 0) return;
+                    ctx.globalAlpha = p.l; ctx.fillStyle = this.c;
+                    ctx.beginPath(); ctx.arc(p.x, p.y, p.s, 0, Math.PI*2); ctx.fill();
+                });
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function init() {
+            const shop = document.getElementById('shop');
+            Object.values(BLUEPRINTS).forEach(bp => {
+                const card = document.createElement('div');
+                card.className = `blueprint-card p-4 rounded-lg flex flex-col gap-1 ${GameState.selectedBlueprint === bp.id ? 'selected' : ''}`;
+                card.id = `card-${bp.id}`;
+                card.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <span class="orbitron text-xs font-bold text-white">${bp.name}</span>
+                        <span class="text-amber-400 font-bold">$${bp.cost}</span>
+                    </div>
+                    <p class="text-[9px] text-slate-400 leading-tight">${bp.desc}</p>
+                `;
+                card.onclick = () => {
+                    GameState.selectedBlueprint = bp.id;
+                    document.querySelectorAll('.blueprint-card').forEach(c => c.classList.remove('selected'));
+                    card.classList.add('selected');
+                    closeContext();
+                };
+                shop.appendChild(card);
+            });
+
+            for(let i=0; i<200; i++) stars.push(new Star());
+
+            window.addEventListener('resize', handleResize);
+            handleResize();
+
+            canvas.addEventListener('click', handleMapClick);
+            document.getElementById('btn-start').onclick = startInvasion;
+            document.getElementById('btn-upgrade').onclick = upgradeTower;
+            document.getElementById('btn-sell').onclick = sellTower;
+
+            requestAnimationFrame(mainLoop);
+            updateUI();
+        }
+
+        function handleResize() {
+            const container = document.getElementById('canvas-container');
+            const w = container.clientWidth - 40;
+            const h = container.clientHeight - 40;
+            const aspect = GRID_W / GRID_H;
+
+            if (w / h > aspect) {
+                canvas.height = h;
+                canvas.width = h * aspect;
+            } else {
+                canvas.width = w;
+                canvas.height = w / aspect;
+            }
+
+            TILE = canvas.width / GRID_W;
+            
+            towers.forEach(t => { t.x = t.gx * TILE + TILE/2; t.y = t.gy * TILE + TILE/2; });
+        }
+
+        function handleMapClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const gx = Math.floor((e.clientX - rect.left) / TILE);
+            const gy = Math.floor((e.clientY - rect.top) / TILE);
+
+            const existing = towers.find(t => t.gx === gx && t.gy === gy);
+            if (existing) {
+                showContext(existing);
+                return;
+            }
+
+            const onPath = Path.some(p => p.x === gx && p.y === gy);
+            if (onPath) return;
+
+            const bp = BLUEPRINTS[GameState.selectedBlueprint];
+            if (GameState.credits >= bp.cost) {
+                GameState.credits -= bp.cost;
+                towers.push(new DefenseUnit(gx, gy, bp));
+                updateUI();
+            }
+        }
+
+        function showContext(tower) {
+            GameState.focusedTower = tower;
+            const menu = document.getElementById('tower-context');
+            document.getElementById('ctx-name').innerText = tower.bp.name;
+            document.getElementById('ctx-lvl').innerText = `MK. ${tower.level}`;
+            document.getElementById('ctx-dmg').innerText = tower.damage;
+            document.getElementById('ctx-rng').innerText = tower.range;
+            document.getElementById('ctx-cost').innerText = tower.upgradeCost;
+            
+            const rect = canvas.getBoundingClientRect();
+            menu.style.display = 'block';
+            menu.style.left = `${Math.min(window.innerWidth - 220, Math.max(20, rect.left + tower.x - 100))}px`;
+            menu.style.top = `${Math.max(20, rect.top + tower.y - 150)}px`;
+        }
+
+        function closeContext() {
+            GameState.focusedTower = null;
+            document.getElementById('tower-context').style.display = 'none';
+        }
+
+        function upgradeTower() {
+            const t = GameState.focusedTower;
+            if (t && GameState.credits >= t.upgradeCost) {
+                GameState.credits -= t.upgradeCost;
+                t.level++;
+                t.syncStats();
+                showContext(t);
+                updateUI();
+            }
+        }
+
+        function sellTower() {
+            const t = GameState.focusedTower;
+            if (t) {
+                GameState.credits += Math.floor(t.bp.cost * 0.6);
+                towers = towers.filter(unit => unit !== t);
+                closeContext();
+                updateUI();
+            }
+        }
+
+        function startInvasion() {
+            if (GameState.inMission) return;
+            GameState.wave++;
+            GameState.totalEnemiesInWave = 10 + GameState.wave * 3;
+            GameState.enemiesDefeated = 0;
+            GameState.spawnQueue = GameState.totalEnemiesInWave;
+            GameState.inMission = true;
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('btn-start').classList.add('opacity-50');
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('stat-money').innerText = `$${GameState.credits.toLocaleString()}`;
+            document.getElementById('stat-lives').innerText = `${Math.max(0, GameState.integrity)}%`;
+            document.getElementById('stat-wave').innerText = `WAVE ${GameState.wave.toString().padStart(2, '0')}`;
+            
+            const progress = (GameState.enemiesDefeated / GameState.totalEnemiesInWave) * 100 || 0;
+            document.getElementById('wave-progress').style.width = `${progress}%`;
+
+            Object.values(BLUEPRINTS).forEach(bp => {
+                const el = document.getElementById(`card-${bp.id}`);
+                if (GameState.credits < bp.cost) el.classList.add('disabled');
+                else el.classList.remove('disabled');
+            });
+
+            if (GameState.integrity <= 0) {
+                document.getElementById('game-over').classList.remove('hidden');
+            }
+        }
+
+        function mainLoop(timestamp) {
+            const dt = GameState.lastFrame ? (timestamp - GameState.lastFrame) / 16.66 : 1;
+            GameState.lastFrame = timestamp;
+            const now = Date.now();
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            stars.forEach(s => s.draw());
+
+            ctx.strokeStyle = 'rgba(0, 242, 255, 0.03)';
+            ctx.lineWidth = 1;
+            for(let i=0; i<GRID_W; i++) {
+                for(let j=0; j<GRID_H; j++) {
+                    const isP = Path.some(p => p.x === i && p.y === j);
+                    if (isP) {
+                        ctx.fillStyle = 'rgba(0, 242, 255, 0.05)';
+                        ctx.fillRect(i*TILE, j*TILE, TILE, TILE);
+                    }
+                    ctx.strokeRect(i*TILE, j*TILE, TILE, TILE);
+                }
+            }
+
+            if (GameState.inMission) {
+                GameState.spawnTimer += 16 * dt;
+                if (GameState.spawnTimer > (1200 - GameState.wave * 10) && GameState.spawnQueue > 0) {
+                    enemies.push(new Enemy(GameState.wave));
+                    GameState.spawnQueue--;
+                    GameState.spawnTimer = 0;
+                }
+
+                if (GameState.spawnQueue === 0 && enemies.length === 0) {
+                    GameState.inMission = false;
+                    document.getElementById('btn-start').disabled = false;
+                    document.getElementById('btn-start').classList.remove('opacity-50');
+                    GameState.credits += 200 + GameState.wave * 50;
+                    updateUI();
+                }
+            }
+
+            towers.forEach(t => { t.update(now, dt); t.draw(); });
+            
+            enemies = enemies.filter(e => {
+                e.update(dt);
+                e.draw();
+                if (e.hp <= 0) {
+                    if (e.hp <= 0 && e.idx < Path.length - 1) {
+                        GameState.credits += e.value;
+                        GameState.enemiesDefeated++;
+                        updateUI();
+                    }
+                    return false;
+                }
+                return true;
+            });
+
+            projectiles = projectiles.filter(p => {
+                const active = p.update(dt);
+                if (active) p.draw();
+                return active;
+            });
+
+            particles = particles.filter(p => p.update(dt) ? (p.draw(), true) : false);
+
+            requestAnimationFrame(mainLoop);
+        }
+
+        init();
+    </script>
+</body>
+</html>
